@@ -1,0 +1,9 @@
+{
+  "name": "biaosub",
+  "version": "1.0.0",
+  "description": "BiaoSUB Panel",
+  "main": "functions/api/[[route]].js",
+  "dependencies": {
+    "hono": "^3.10.0"
+  }
+}

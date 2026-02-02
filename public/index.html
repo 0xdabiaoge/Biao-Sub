@@ -1,0 +1,1340 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BiaoSUB 面板</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet" type="text/css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <script>tailwind.config = { theme: { extend: { colors: { primary: '#6366f1', secondary: '#ec4899', accent: '#1fb2a6', } } } }</script>
+    <style>
+        body {
+            background-color: #0f172a;
+            background-image: radial-gradient(at 0% 0%, hsla(253, 16%, 7%, 1) 0, transparent 50%), radial-gradient(at 50% 0%, hsla(225, 39%, 30%, 1) 0, transparent 50%), radial-gradient(at 100% 0%, hsla(339, 49%, 30%, 1) 0, transparent 50%);
+            min-height: 100vh;
+        }
+
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 3px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        textarea.code-editor {
+            font-family: monospace;
+            white-space: pre;
+            overflow-wrap: normal;
+            overflow-x: scroll;
+            font-size: 12px;
+        }
+
+        .sortable-ghost {
+            opacity: 0.4;
+            background: #6366f1 !important;
+        }
+
+        .sortable-drag {
+            background: #1e293b !important;
+        }
+
+        .drag-handle {
+            cursor: grab;
+        }
+
+        .drag-handle:active {
+            cursor: grabbing;
+        }
+    </style>
+</head>
+
+<body class="text-slate-200">
+    <div id="app">
+        <div v-if="!isLoggedIn"
+            class="fixed inset-0 z-[999] flex items-center justify-center bg-slate-900/90 backdrop-blur-sm">
+            <div class="card w-96 glass-panel shadow-2xl border border-slate-600">
+                <div class="card-body text-center">
+                    <div class="mb-4"><i class="fa-solid fa-shield-halved text-5xl text-primary"></i></div>
+                    <h2 class="text-2xl font-bold text-white mb-2">安全验证</h2>
+                    <input type="password" v-model="loginPassword" @keyup.enter="handleLogin" placeholder="管理员密码"
+                        class="input input-bordered w-full bg-slate-800 text-center mb-4" />
+                    <button @click="handleLogin" class="btn btn-primary w-full" :disabled="loginLoading">{{ loginLoading
+                        ? '验证中...' : '解锁' }}</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="container mx-auto px-4 py-8 max-w-5xl transition-all duration-500"
+            :class="{ 'blur-sm pointer-events-none': !isLoggedIn }">
+            <div class="navbar glass-panel rounded-2xl mb-8 shadow-xl">
+                <div class="flex-1"><a class="btn btn-ghost normal-case text-2xl font-bold text-white"><i
+                            class="fa-solid fa-bolt text-yellow-400 mr-2"></i> BiaoSUB</a></div>
+                <div class="flex-none gap-2">
+                    <button @click="openSettings" class="btn btn-circle btn-ghost tooltip tooltip-bottom"
+                        data-tip="设置"><i class="fa-solid fa-gear text-xl"></i></button>
+                    <button @click="logout" class="btn btn-circle btn-ghost text-red-400 tooltip tooltip-bottom"
+                        data-tip="退出"><i class="fa-solid fa-power-off text-xl"></i></button>
+                </div>
+            </div>
+
+            <div class="tabs tabs-boxed bg-slate-800/50 mb-6 p-1">
+                <a class="tab tab-lg flex-1" :class="{'tab-active bg-primary text-white': currentTab === 'resources'}"
+                    @click="currentTab = 'resources'"><i class="fa-solid fa-database mr-2"></i> 资源池</a>
+                <a class="tab tab-lg flex-1" :class="{'tab-active bg-accent text-white': currentTab === 'groups'}"
+                    @click="currentTab = 'groups'"><i class="fa-solid fa-layer-group mr-2"></i> 聚合订阅组</a>
+            </div>
+
+            <div v-show="currentTab === 'resources'">
+                <div class="flex justify-between items-center mb-4">
+                    <div class="text-sm text-slate-400">所有原始订阅和自建节点</div>
+                    <div class="flex gap-2">
+                        <div v-if="batchMode" class="flex gap-2">
+                            <button @click="selectAllResources" class="btn btn-sm btn-ghost">全选</button>
+                            <button @click="executeBatchDelete" class="btn btn-sm btn-error text-white"
+                                :disabled="selectedResources.length===0">删除选中 ({{selectedResources.length}})</button>
+                            <button @click="batchMode=false; selectedResources=[]"
+                                class="btn btn-sm btn-ghost">取消</button>
+                        </div>
+                        <button v-else @click="batchMode=true" class="btn btn-ghost btn-sm">批量管理</button>
+                        <button @click="openResourceModal()" class="btn btn-primary btn-sm"><i
+                                class="fa-solid fa-plus"></i> 添加资源</button>
+                    </div>
+                </div>
+                <div ref="resourceListEl" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div v-for="item in resources" :key="item.id" :data-id="item.id"
+                        class="card bg-slate-800/50 border border-slate-700 shadow-xl">
+                        <div class="card-body p-5 relative">
+                            <div class="flex justify-between items-start">
+                                <div class="flex items-start gap-3">
+                                    <div class="drag-handle cursor-move text-slate-500 hover:text-slate-300 mt-1">
+                                        <i class="fa-solid fa-grip-vertical"></i>
+                                    </div>
+                                    <input v-if="batchMode" type="checkbox" :value="item.id" v-model="selectedResources"
+                                        class="checkbox checkbox-primary mt-1" />
+                                    <div>
+                                        <h2 class="card-title text-base">{{ item.name }} <span class="badge badge-sm"
+                                                :class="item.type==='node'?'badge-secondary':'badge-primary'">{{
+                                                item.type }}</span></h2>
+                                        <p class="text-xs text-slate-500 font-mono mt-1 break-all line-clamp-1">{{
+                                            item.url }}</p>
+                                    </div>
+                                </div>
+                                <div class="flex flex-col items-end gap-2">
+                                    <button @click="refreshResource(item)" class="btn btn-xs btn-circle btn-ghost"
+                                        :class="{'loading': item.refreshing}" title="刷新订阅信息"><i v-if="!item.refreshing"
+                                            class="fa-solid fa-rotate"></i></button>
+                                </div>
+                            </div>
+
+                            <div class="mt-2 text-xs text-slate-500 text-right">
+                                包含节点: <span class="text-white font-bold">{{ item.info ? (item.info.nodeCount || 0) : 0
+                                    }}</span> 个
+                            </div>
+
+                            <div class="card-actions justify-end mt-4">
+                                <button @click="previewNodes(item)" class="btn btn-xs btn-ghost">预览节点</button>
+                                <button @click="editResource(item)" class="btn btn-xs btn-ghost">编辑</button>
+                                <button @click="deleteResource(item.id)"
+                                    class="btn btn-xs btn-ghost text-error">删除</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div v-show="currentTab === 'groups'">
+                <div class="flex justify-between items-center mb-4">
+                    <div class="text-sm text-slate-400">创建独立的订阅链接，按需组合资源</div>
+                    <button @click="openGroupModal()" class="btn btn-accent btn-sm text-white"><i
+                            class="fa-solid fa-plus"></i> 新建聚合组</button>
+                </div>
+                <div class="grid grid-cols-1 gap-6">
+                    <div v-for="group in groups" :key="group.id"
+                        class="card bg-slate-800/50 border border-slate-700 shadow-xl">
+                        <div class="card-body p-5">
+                            <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                <div>
+                                    <h2 class="card-title text-lg text-accent">{{ group.name }}</h2>
+                                    <div class="text-xs text-slate-500 mt-1">包含资源: <span class="text-slate-300">{{
+                                            getGroupResourceCount(group) }}</span> 个</div>
+                                </div>
+                                <div class="flex gap-2 flex-wrap">
+                                    <button @click="copyGroupLink(group, 'clash')"
+                                        class="btn btn-sm bg-[#1e1e1e] hover:bg-[#2d2d2d] text-slate-400 border-slate-600"><i
+                                            class="fa-solid fa-cat"></i> Clash</button>
+                                    <button @click="copyGroupLink(group, 'base64')"
+                                        class="btn btn-sm bg-[#1e1e1e] hover:bg-[#2d2d2d] text-slate-400 border-slate-600"><i
+                                            class="fa-solid fa-link"></i> V2RayN</button>
+
+                                    <button @click="refreshToken(group)" class="btn btn-sm btn-ghost text-warning"
+                                        title="刷新密钥"><i class="fa-solid fa-key"></i></button>
+                                    <button @click="editGroup(group)" class="btn btn-sm btn-ghost"><i
+                                            class="fa-solid fa-pen"></i></button>
+                                    <button @click="deleteGroup(group.id)" class="btn btn-sm btn-ghost text-error"><i
+                                            class="fa-solid fa-trash"></i></button>
+                                </div>
+                            </div>
+                            <div class="divider my-1"></div>
+                            <div class="flex flex-wrap gap-2" v-if="group.config && group.config.length > 0">
+                                <span v-for="conf in group.config" :key="conf.subId"
+                                    class="badge badge-neutral text-xs">
+                                    {{ getResourceName(conf.subId) }}
+                                    <span v-if="Array.isArray(conf.include) && conf.include.length > 0"
+                                        class="ml-1 text-accent">({{
+                                        conf.include.length }})</span>
+                                    <span v-else class="ml-1 text-slate-500">(全)</span>
+                                </span>
+                            </div>
+                            <div v-else class="text-xs text-slate-600 italic">V2Ray: 未选择资源</div>
+
+                            <div class="mt-2 text-xs" v-if="group.clash_config">
+                                <span v-if="group.clash_config.mode === 'raw'" class="text-success">Clash: 托管配置模式</span>
+                                <span v-else class="text-slate-500">Clash: 资源 {{group.clash_config.resources ?
+                                    group.clash_config.resources.length : 0}} 个</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <dialog class="modal" :class="{ 'modal-open': resourceModal.show }">
+                <div class="modal-box bg-slate-800 border border-slate-700">
+                    <h3 class="font-bold text-lg text-white mb-4">{{ resourceModal.isEdit ? '编辑资源' : '添加资源' }}</h3>
+                    <div class="flex flex-col gap-4">
+                        <input type="text" v-model="resourceForm.name" placeholder="资源名称 (可选，留空则使用节点原名或自动生成)"
+                            class="input input-bordered w-full bg-slate-900" />
+                        <div class="tabs tabs-boxed bg-slate-900">
+                            <a class="tab flex-1" :class="{'tab-active': resourceForm.type==='group'}"
+                                @click="resourceForm.type='group'">节点组</a>
+                            <a class="tab flex-1" :class="{'tab-active': resourceForm.type==='node'}"
+                                @click="resourceForm.type='node'">单独节点</a>
+                        </div>
+                        <div v-if="resourceForm.type==='group'">
+                            <textarea v-model="resourceForm.url" placeholder="请粘贴节点链接，每行一个。保存后将作为一个整体管理。"
+                                class="textarea textarea-bordered h-32 w-full bg-slate-900"></textarea>
+                        </div>
+                        <div v-else>
+                            <input type="text" v-model="resourceForm.url" placeholder="支持批量粘贴，会自动拆分为多个独立节点"
+                                class="input input-bordered w-full bg-slate-900" />
+                        </div>
+                    </div>
+                    <div class="modal-action">
+                        <button class="btn btn-ghost" @click="resourceModal.show=false">取消</button>
+                        <button class="btn btn-primary" @click="saveResource" :disabled="submitting">保存</button>
+                    </div>
+                </div>
+            </dialog>
+
+            <!-- Group Modal -->
+            <dialog class="modal" :class="{ 'modal-open': groupModal.show }">
+                <div class="modal-box bg-slate-800 border border-slate-700 max-w-4xl w-11/12">
+                    <h3 class="font-bold text-lg text-white mb-4">{{ groupModal.isEdit ? '编辑聚合组' : '新建聚合组' }}</h3>
+                    <div class="form-control w-full mb-4">
+                        <label class="label"><span class="label-text text-white">聚合组名称 <span
+                                    class="text-error">*</span></span></label>
+                        <input type="text" v-model="groupForm.name" placeholder="请输入聚合组名称 (必填)"
+                            class="input input-bordered w-full bg-slate-900" :class="{'input-error': groupNameError}"
+                            @input="groupNameError = false" />
+                    </div>
+
+                    <!-- 托管模式下隐藏 Tab，只显示名称和上传区域 -->
+                    <div v-if="groupForm.clash_config.mode !== 'raw'" class="tabs tabs-boxed bg-slate-900 mb-4">
+                        <a class="tab" :class="{'tab-active': groupModal.tab==='base'}"
+                            @click="groupModal.tab='base'">节点/资源选择</a>
+                        <a class="tab" :class="{'tab-active': groupModal.tab==='clash'}"
+                            @click="groupModal.tab='clash'">Clash 配置</a>
+                    </div>
+
+                    <!-- Tab 1: 节点资源选择 (Unified) -->
+                    <div v-show="groupModal.tab==='base'" class="flex flex-col gap-4">
+                        <div class="flex justify-between items-center">
+                            <div class="text-sm text-slate-400">请勾选要加入此聚合组的资源：</div>
+                            <div class="flex gap-2">
+                                <button @click="selectAllGroupResources" class="btn btn-xs btn-ghost text-accent">
+                                    <i class="fa-solid fa-check-double"></i> 全选
+                                </button>
+                                <button @click="deselectAllGroupResources" class="btn btn-xs btn-ghost text-warning">
+                                    <i class="fa-solid fa-xmark"></i> 取消全选
+                                </button>
+                            </div>
+                        </div>
+                        <!-- 已选择的资源（可拖动排序） -->
+                        <div v-if="groupForm.config.length > 0" class="mb-4">
+                            <div class="text-xs text-slate-400 mb-2">已选择 (拖动排序):</div>
+                            <div ref="groupResourceListEl" class="bg-slate-700 rounded p-2 flex flex-wrap gap-2">
+                                <div v-for="conf in groupForm.config" :key="conf.subId" :data-id="conf.subId"
+                                    class="badge badge-accent gap-1 cursor-move drag-handle">
+                                    <i class="fa-solid fa-grip-vertical text-xs opacity-50"></i>
+                                    {{ getResourceName(conf.subId) }}
+                                    <button @click.stop="toggleResourceSelection(conf.subId, false)"
+                                        class="hover:text-red-400">×</button>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- 可选择的资源 -->
+                        <div class="text-xs text-slate-400 mb-2">可选择:</div>
+                        <div
+                            class="max-h-72 overflow-y-auto custom-scrollbar bg-slate-900 rounded-lg border border-slate-700 p-2">
+                            <div v-for="res in resources" :key="res.id"
+                                class="p-3 border-b border-slate-800 last:border-none hover:bg-slate-800/50">
+                                <div class="flex items-center justify-between">
+                                    <label class="flex items-center gap-3 cursor-pointer flex-1">
+                                        <input type="checkbox" class="checkbox checkbox-accent"
+                                            :checked="isResourceSelected(res.id)"
+                                            @change="toggleResourceSelection(res.id, $event.target.checked)" />
+                                        <div>
+                                            <div class="text-white font-medium">{{ res.name }}</div>
+                                            <div class="text-xs text-slate-500 mt-1">包含节点: {{ res.info ?
+                                                (res.info.nodeCount
+                                                || 0) : 0 }}
+                                            </div>
+                                        </div>
+                                    </label>
+                                    <button class="btn btn-xs btn-ghost text-accent"
+                                        v-if="res.info && res.info.nodeCount > 0 && isResourceSelected(res.id)"
+                                        @click="openNodeSelector(res)">
+                                        <i class="fa-solid fa-filter"></i> 筛选节点
+                                    </button>
+                                </div>
+                                <!-- 链式代理设置 -->
+                                <div v-if="isResourceSelected(res.id)" class="mt-2 pl-8 flex items-center gap-3">
+                                    <label class="flex items-center gap-2 cursor-pointer">
+                                        <input type="checkbox" class="toggle toggle-xs toggle-warning"
+                                            :checked="getDialerProxy(res.id).enabled"
+                                            @change="setDialerProxy(res.id, $event.target.checked, getDialerProxy(res.id).group)" />
+                                        <span class="text-xs text-warning"><i
+                                                class="fa-solid fa-link mr-1"></i>链式代理</span>
+                                    </label>
+                                    <select v-if="getDialerProxy(res.id).enabled"
+                                        class="select select-xs select-bordered bg-slate-800 text-white max-w-[150px]"
+                                        :value="getDialerProxy(res.id).group"
+                                        @change="setDialerProxy(res.id, true, $event.target.value)">
+                                        <option value="">选择策略组</option>
+                                        <option v-for="g in groupForm.clash_config.groups" :key="g.name"
+                                            :value="g.name">{{ g.name }}</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div v-if="resources.length===0" class="text-center py-4 text-slate-500">暂无可用资源</div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 2: Clash 配置 -->
+                    <div v-show="groupModal.tab==='clash'" class="flex flex-col gap-4">
+                        <div class="alert alert-info shadow-lg text-xs">
+                            <i class="fa-solid fa-circle-info"></i>
+                            <span>节点已在“节点/资源选择”中统一管理。此处仅需配置头部、策略组和规则。</span>
+                        </div>
+                        <div class="flex justify-end">
+                            <button class="btn btn-sm btn-warning gap-1" @click="saveAsTemplate">
+                                <i class="fa-solid fa-star"></i> 保存为模板
+                            </button>
+                        </div>
+                        <div class="collapse collapse-arrow bg-slate-900 border border-slate-700">
+                            <input type="checkbox" />
+                            <div class="collapse-title text-sm font-medium text-white">头部配置 (Header)</div>
+                            <div class="collapse-content">
+                                <textarea v-model="groupForm.clash_config.header"
+                                    class="code-editor w-full h-48 bg-[#1e1e1e] text-slate-300 p-2 text-xs outline-none resize-y rounded"></textarea>
+                            </div>
+                        </div>
+                        <div class="collapse collapse-arrow bg-slate-900 border border-slate-700">
+                            <input type="checkbox" CHECKED />
+                            <div class="collapse-title text-sm font-medium text-white">策略组 (Proxy Groups)</div>
+                            <div class="collapse-content">
+                                <div class="flex justify-end mb-2">
+                                    <button class="btn btn-xs btn-accent" @click="addClashGroup"><i
+                                            class="fa-solid fa-plus"></i> 添加组</button>
+                                </div>
+                                <div v-for="(g, idx) in groupForm.clash_config.groups" :key="idx"
+                                    class="p-2 border border-slate-700 rounded mb-2 bg-[#1e1e1e]">
+                                    <div class="flex gap-2 mb-2">
+                                        <input v-model="g.name" placeholder="组名 (如 Proxy)"
+                                            class="input input-xs input-bordered bg-slate-800 text-white w-1/3" />
+                                        <select v-model="g.type"
+                                            class="select select-xs select-bordered bg-slate-800 text-white w-1/3">
+                                            <option value="select">select (手动选择)</option>
+                                            <option value="url-test">url-test (自动测速)</option>
+                                            <option value="fallback">fallback (故障转移)</option>
+                                            <option value="load-balance">load-balance (负载均衡)</option>
+                                        </select>
+                                        <button @click="groupForm.clash_config.groups.splice(idx, 1)"
+                                            class="btn btn-xs btn-ghost text-error"><i
+                                                class="fa-solid fa-trash"></i></button>
+                                    </div>
+                                    <div class="flex items-center gap-2 mt-2">
+                                        <button @click="openClashNodeSelector(g)"
+                                            class="btn btn-xs btn-outline btn-accent">
+                                            <i class="fa-solid fa-list-check mr-1"></i> 选择节点
+                                        </button>
+                                        <span class="text-xs text-slate-400">
+                                            已选: <span class="text-accent font-bold">{{ g.proxies && g.proxies.length > 0
+                                                ? g.proxies.length : '全部' }}</span>
+                                        </span>
+                                    </div>
+                                    <div v-if="g.proxies && g.proxies.length > 0" class="mt-2 flex flex-wrap gap-1">
+                                        <span v-for="pName in g.proxies.slice(0, 5)" :key="pName"
+                                            class="badge badge-xs badge-neutral truncate max-w-[100px]">{{ pName
+                                            }}</span>
+                                        <span v-if="g.proxies.length > 5" class="badge badge-xs badge-ghost">+{{
+                                            g.proxies.length - 5 }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="collapse collapse-arrow bg-slate-900 border border-slate-700">
+                            <input type="checkbox" />
+                            <div class="collapse-title text-sm font-medium text-white">分流规则 (Rules)</div>
+                            <div class="collapse-content">
+                                <textarea v-model="groupForm.clash_config.rules"
+                                    class="code-editor w-full h-64 bg-[#1e1e1e] text-slate-300 p-2 text-xs outline-none resize-y rounded"></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 3: Raw Mode (托管配置) -->
+                    <div v-show="groupForm.clash_config.mode === 'raw'" class="flex flex-col gap-4">
+                        <div class="alert alert-info shadow-lg text-xs">
+                            <i class="fa-solid fa-cloud-arrow-up"></i>
+                            <span>托管模式：上传或粘贴完整的 Clash YAML 配置文件，订阅将直接返回此内容。</span>
+                        </div>
+
+                        <!-- 文件上传区域 -->
+                        <div class="flex flex-col gap-3">
+                            <label class="text-sm text-slate-400">上传 YAML 配置文件：</label>
+                            <div class="flex gap-2">
+                                <input type="file" accept=".yaml,.yml,.txt" @change="handleRawYamlUpload"
+                                    class="file-input file-input-bordered file-input-accent w-full max-w-xs bg-slate-900" />
+                                <button v-if="groupForm.clash_config.raw_yaml"
+                                    @click="groupForm.clash_config.raw_yaml = ''; groupForm.name = ''"
+                                    class="btn btn-ghost btn-sm text-error">
+                                    <i class="fa-solid fa-trash"></i> 清空
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- YAML 内容预览/编辑 -->
+                        <div class="flex flex-col gap-2">
+                            <label class="text-sm text-slate-400">配置内容：</label>
+                            <textarea v-model="groupForm.clash_config.raw_yaml" placeholder="上传文件或在此粘贴 YAML 配置内容..."
+                                class="code-editor w-full h-80 bg-[#1e1e1e] text-slate-300 p-4 outline-none resize-y rounded border border-slate-700"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="modal-action">
+                        <button class="btn btn-ghost" @click="groupModal.show=false">取消</button>
+                        <button class="btn btn-accent text-white" @click="saveGroup"
+                            :disabled="submitting">保存聚合组</button>
+                    </div>
+                </div>
+            </dialog>
+
+            <!-- Template Selection Modal -->
+            <dialog class="modal" :class="{ 'modal-open': templateModal.show }">
+                <div class="modal-box bg-slate-800 border border-slate-700 max-w-2xl">
+                    <h3 class="font-bold text-lg text-white mb-4">选择配置模板</h3>
+                    <div class="grid grid-cols-2 gap-4">
+                        <button @click="selectTemplate('default')"
+                            class="card bg-slate-700 hover:bg-slate-600 cursor-pointer border border-slate-600 transition-all p-4 flex flex-col items-center gap-2">
+                            <i class="fa-solid fa-wand-magic-sparkles text-3xl text-accent"></i>
+                            <div class="font-bold text-white">默认模板</div>
+                            <div class="text-xs text-slate-400 text-center">预置常用规则、DNS及策略组<br>(推荐)</div>
+                        </button>
+                        <button @click="selectTemplate('blank')"
+                            class="card bg-slate-700 hover:bg-slate-600 cursor-pointer border border-slate-600 transition-all p-4 flex flex-col items-center gap-2">
+                            <i class="fa-solid fa-file-code text-3xl text-slate-400"></i>
+                            <div class="font-bold text-white">空白模板</div>
+                            <div class="text-xs text-slate-400 text-center">完全自定义配置<br>(高级用户)</div>
+                        </button>
+                        <button @click="selectTemplate('raw')"
+                            class="card bg-slate-700 hover:bg-slate-600 cursor-pointer border border-slate-600 transition-all p-4 flex flex-col items-center gap-2">
+                            <i class="fa-solid fa-cloud-arrow-up text-3xl text-warning"></i>
+                            <div class="font-bold text-white">托管配置</div>
+                            <div class="text-xs text-slate-400 text-center">直接粘贴完整YAML<br>(托管模式)</div>
+                        </button>
+                        <!-- 我的模板 -->
+                        <div class="card bg-slate-700 border border-slate-600 transition-all p-4 flex flex-col items-center gap-2 relative"
+                            :class="{'bg-slate-600': templateModal.showMyTemplates}">
+                            <button
+                                @click="templateModal.showMyTemplates = !templateModal.showMyTemplates; loadTemplates()"
+                                class="w-full flex flex-col items-center gap-2">
+                                <i class="fa-solid fa-star text-3xl text-yellow-400"></i>
+                                <div class="font-bold text-white">我的模板</div>
+                                <div class="text-xs text-slate-400 text-center">自定义保存的模板<br>(点击展开)</div>
+                            </button>
+                            <!-- 子菜单 -->
+                            <div v-if="templateModal.showMyTemplates"
+                                class="absolute top-full left-0 right-0 mt-2 bg-slate-900 border border-slate-600 rounded-lg shadow-xl z-10 p-2 max-h-48 overflow-y-auto">
+                                <div v-if="userTemplates.length === 0" class="text-center text-slate-500 text-sm py-2">
+                                    暂无保存的模板
+                                </div>
+                                <div v-for="tpl in userTemplates" :key="tpl.id"
+                                    class="flex items-center justify-between p-2 hover:bg-slate-700 rounded cursor-pointer group">
+                                    <button @click="selectUserTemplate(tpl)"
+                                        class="flex-1 text-left text-white text-sm">
+                                        <i class="fa-solid fa-file-lines mr-2 text-accent"></i>{{ tpl.name }}
+                                    </button>
+                                    <button @click.stop="deleteTemplate(tpl.id)"
+                                        class="btn btn-xs btn-ghost text-error opacity-0 group-hover:opacity-100">
+                                        <i class="fa-solid fa-trash"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-action">
+                        <button class="btn btn-ghost"
+                            @click="templateModal.show=false; templateModal.showMyTemplates=false">取消</button>
+                    </div>
+                </div>
+            </dialog>
+
+            <dialog class="modal" :class="{ 'modal-open': nodeSelector.show }">
+                <div class="modal-box bg-slate-800 border border-slate-700">
+                    <h3 class="font-bold text-lg text-white mb-2">筛选节点: {{ nodeSelector.resourceName }}</h3>
+                    <div v-if="nodeSelector.loading" class="py-10 text-center"><span
+                            class="loading loading-spinner text-accent"></span> 加载中...</div>
+                    <div v-else>
+                        <div class="flex justify-between mb-2">
+                            <button
+                                @click="nodeSelector.tempSelected = nodeSelector.nodes.map(n=>n.name); nodeSelector.selected='all'"
+                                class="btn btn-xs btn-ghost text-accent">全选</button>
+                            <button @click="nodeSelector.tempSelected = []; nodeSelector.selected='select'"
+                                class="btn btn-xs btn-ghost text-warning">清空</button>
+                        </div>
+                        <div class="max-h-80 overflow-y-auto custom-scrollbar bg-slate-900 rounded p-2">
+                            <label v-for="node in nodeSelector.nodes" :key="node.name"
+                                class="flex items-center gap-2 p-2 hover:bg-slate-800 cursor-pointer">
+                                <input type="checkbox" :value="node.name" v-model="nodeSelector.tempSelected"
+                                    class="checkbox checkbox-xs checkbox-accent" />
+                                <span class="text-xs text-slate-300 truncate">{{ node.name }}</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="modal-action">
+                        <button class="btn btn-ghost" @click="nodeSelector.show=false">取消</button>
+                        <button class="btn btn-accent" @click="confirmNodeSelection">确认选择</button>
+                    </div>
+                </div>
+            </dialog>
+
+            <dialog class="modal" :class="{ 'modal-open': clashNodeSelector.show }">
+                <div class="modal-box bg-slate-800 border border-slate-700 max-w-2xl">
+                    <h3 class="font-bold text-lg text-white mb-2">选择节点进入策略组</h3>
+                    <div class="text-xs text-warning mb-2">* 此列表根据 Clash 配置中选中的资源实时生成。</div>
+                    <div v-if="clashNodeSelector.loading" class="py-10 text-center"><span
+                            class="loading loading-spinner text-accent"></span> 加载所有节点中...</div>
+                    <div v-else>
+                        <div class="flex justify-between mb-2">
+                            <div class="flex gap-2">
+                                <button @click="clashSelectAll" class="btn btn-xs btn-ghost text-accent">全选</button>
+                                <button @click="clashNodeSelector.tempSelected = []"
+                                    class="btn btn-xs btn-ghost text-warning">清空</button>
+                            </div>
+                        </div>
+                        <!-- 已选择的节点（可拖动排序） -->
+                        <div v-if="clashNodeSelector.tempSelected.length > 0" class="mb-4">
+                            <div class="text-xs text-slate-400 mb-2">已选择 (拖动排序):</div>
+                            <div ref="clashSelectedList" class="bg-slate-700 rounded p-2 flex flex-wrap gap-2">
+                                <div v-for="nodeName in clashNodeSelector.tempSelected" :key="nodeName"
+                                    :data-id="nodeName" class="badge badge-secondary gap-1 cursor-move drag-handle">
+                                    <i class="fa-solid fa-grip-vertical text-xs opacity-50"></i>
+                                    {{ nodeName }}
+                                    <button @click.stop="removeFromClashSelected(nodeName)"
+                                        class="hover:text-red-400">×</button>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- 可选择的节点 -->
+                        <div class="text-xs text-slate-400 mb-2">可选择:</div>
+                        <div
+                            class="max-h-64 overflow-y-auto custom-scrollbar bg-slate-900 rounded p-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <label v-for="nodeName in clashNodeSelector.allNodeNames" :key="nodeName"
+                                class="flex items-center gap-2 p-2 hover:bg-slate-800 cursor-pointer border border-slate-700 rounded">
+                                <input type="checkbox" :value="nodeName" v-model="clashNodeSelector.tempSelected"
+                                    class="checkbox checkbox-xs checkbox-secondary" />
+                                <span class="text-xs text-slate-300 truncate">{{ nodeName }}</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="modal-action">
+                        <button class="btn btn-ghost" @click="clashNodeSelector.show=false">取消</button>
+                        <button class="btn btn-accent" @click="confirmClashNodeSelection">确认</button>
+                    </div>
+                </div>
+            </dialog>
+
+            <dialog class="modal" :class="{ 'modal-open': previewModal.show }">
+                <div class="modal-box bg-slate-800 border border-slate-700">
+                    <h3 class="font-bold text-lg text-white mb-4">节点预览 <span
+                            class="text-xs text-slate-400">(可拖动排序)</span></h3>
+                    <div ref="previewListEl" class="max-h-96 overflow-y-auto bg-slate-900 rounded p-2">
+                        <div v-for="(node, idx) in previewModal.nodes" :key="idx" :data-idx="idx"
+                            class="text-xs text-slate-400 border-b border-slate-700 py-2 flex items-center gap-2">
+                            <div class="drag-handle cursor-move text-slate-500 hover:text-slate-300 flex-shrink-0">
+                                <i class="fa-solid fa-grip-vertical"></i>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-white font-bold truncate pr-2">{{ node.name }}</span>
+                                    <button @click="copyText(node.link)"
+                                        class="btn btn-square btn-xs btn-ghost text-accent flex-shrink-0"><i
+                                            class="fa-regular fa-copy"></i></button>
+                                </div>
+                                <div class="font-mono mt-1 truncate opacity-50 break-all">{{ node.link }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-action">
+                        <button class="btn btn-secondary btn-sm" @click="copyAllPreviewNodes">复制全部链接</button>
+                        <button class="btn btn-ghost btn-sm" @click="previewModal.show=false">关闭</button>
+                    </div>
+                </div>
+            </dialog>
+
+            <!-- Settings Modal -->
+            <dialog class="modal" :class="{ 'modal-open': settingsModal.show }">
+                <div class="modal-box bg-slate-800 border border-slate-700 max-w-lg">
+                    <h3 class="font-bold text-xl text-white mb-6 flex items-center gap-2">
+                        <i class="fa-solid fa-gear text-accent"></i> 系统设置
+                    </h3>
+
+                    <!-- 修改密码 -->
+                    <div class="collapse collapse-arrow bg-slate-900 border border-slate-700 mb-3">
+                        <input type="checkbox" />
+                        <div class="collapse-title text-sm font-medium text-white flex items-center gap-2">
+                            <i class="fa-solid fa-key text-warning"></i> 修改管理密码
+                        </div>
+                        <div class="collapse-content">
+                            <div class="flex flex-col gap-3 pt-2">
+                                <input type="password" v-model="settingsModal.newPassword" placeholder="输入新密码"
+                                    class="input input-bordered input-sm bg-slate-800" />
+                                <input type="password" v-model="settingsModal.confirmPassword" placeholder="确认新密码"
+                                    class="input input-bordered input-sm bg-slate-800" />
+                                <button @click="changePassword" class="btn btn-sm btn-warning">
+                                    <i class="fa-solid fa-save"></i> 保存密码
+                                </button>
+                                <div class="text-xs text-slate-500">
+                                    <i class="fa-solid fa-info-circle"></i> 修改后需要在 Cloudflare 环境变量中同步更新 ADMIN_PASSWORD
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 数据备份 -->
+                    <div class="collapse collapse-arrow bg-slate-900 border border-slate-700 mb-3">
+                        <input type="checkbox" />
+                        <div class="collapse-title text-sm font-medium text-white flex items-center gap-2">
+                            <i class="fa-solid fa-database text-info"></i> 数据备份
+                        </div>
+                        <div class="collapse-content">
+                            <div class="flex flex-col gap-3 pt-2">
+                                <button @click="exportBackup" class="btn btn-sm btn-info gap-1">
+                                    <i class="fa-solid fa-download"></i> 导出备份
+                                </button>
+                                <div class="divider text-xs">或</div>
+                                <input type="file" accept=".json" @change="importBackup"
+                                    class="file-input file-input-bordered file-input-sm bg-slate-800 w-full" />
+                                <div class="text-xs text-slate-500">
+                                    <i class="fa-solid fa-info-circle"></i> 备份包含：资源池、聚合组、模板
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 关于 -->
+                    <div class="bg-slate-900 border border-slate-700 rounded-lg p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center gap-2">
+                                <i class="fa-solid fa-bolt text-yellow-400 text-xl"></i>
+                                <span class="font-bold text-white">BiaoSUB</span>
+                            </div>
+                            <span class="badge badge-accent">v1.0.0</span>
+                        </div>
+                        <div class="text-xs text-slate-400 mb-3">
+                            轻量级订阅聚合管理面板，基于 Cloudflare Pages + D1
+                        </div>
+                        <a href="https://github.com/0xdabiaoge/Biao-Sub" target="_blank"
+                            class="btn btn-sm btn-ghost gap-1 w-full">
+                            <i class="fa-brands fa-github text-lg"></i> GitHub 项目主页
+                        </a>
+                    </div>
+
+                    <div class="modal-action">
+                        <button class="btn btn-ghost" @click="settingsModal.show=false">关闭</button>
+                    </div>
+                </div>
+            </dialog>
+
+            <div v-if="toast.show" class="toast toast-bottom toast-end z-50">
+                <div class="alert shadow-lg text-white"
+                    :class="toast.type === 'success' ? 'alert-success' : 'alert-error'"><span>{{ toast.message }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, reactive } = Vue
+        const API = '/api'
+
+        createApp({
+            setup() {
+                try {
+                    const isLoggedIn = ref(false); const loginPassword = ref(''); const loginLoading = ref(false)
+                    const currentTab = ref('resources')
+                    const toast = reactive({ show: false, message: '', type: 'success' })
+
+                    // --- Data & State ---
+                    const resources = ref([])
+                    const groups = ref([])
+                    const resourceModal = reactive({ show: false, isEdit: false })
+                    const resourceForm = ref({ name: '', url: '', type: 'node' })
+                    const groupModal = reactive({ show: false, isEdit: false, tab: 'base' })
+                    const templateModal = reactive({ show: false, showMyTemplates: false })
+                    const userTemplates = ref([])
+                    const groupForm = ref({ id: null, name: '', config: [], clash_config: { mode: 'generate', header: '', groups: [], rules: '', resources: [], raw_yaml: '' } })
+                    const groupNameError = ref(false)
+                    const batchMode = ref(false)
+                    const selectedResources = ref([])
+                    const submitting = ref(false)
+                    const nodeSelector = reactive({ show: false, loading: false, resourceId: null, resourceName: '', nodes: [], selected: 'all', tempSelected: [] })
+                    const clashNodeSelector = reactive({ show: false, loading: false, currentGroup: null, allNodeNames: [], tempSelected: [] })
+                    const previewModal = reactive({ show: false, nodes: [] })
+                    const settingsModal = reactive({ show: false, newPassword: '', confirmPassword: '' })
+                    const clashSelectedList = ref(null)
+                    const resourceListEl = ref(null)
+                    const previewListEl = ref(null)
+                    const groupResourceListEl = ref(null)
+
+                    // --- 默认模板数据 ---
+                    const defaultHeader = `mixed-port: 7890
+ipv6: true
+allow-lan: true
+unified-delay: false
+tcp-concurrent: true
+geodata-mode: true
+geox-url:
+  geoip: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip-lite.dat"
+  geosite: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+  mmdb: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country-lite.mmdb"
+  asn: "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb"
+find-process-mode: strict
+global-client-fingerprint: chrome
+profile:
+  store-selected: true
+  store-fake-ip: true
+sniffer:
+  enable: true
+  sniff:
+    HTTP:
+      ports: [80, 8080-8880]
+      override-destination: true
+    TLS:
+      ports: [443, 8443]
+    QUIC:
+      ports: [443, 8443]
+  skip-domain:
+    - "Mijia Cloud"
+    - "+.push.apple.com"
+tun:
+  enable: true
+  stack: system
+  mtu: 1400
+  dns-hijack:
+    - "any:53"
+    - "tcp://any:53"
+  auto-route: true
+  auto-redirect: true
+  auto-detect-interface: true
+dns:
+  enable: true
+  listen: "0.0.0.0:1053"
+  ipv6: true
+  respect-rules: true
+  enhanced-mode: fake-ip
+  fake-ip-range: "198.18.0.1/16"
+  fake-ip-filter: 
+    - "+.lan"
+    - "+.local"
+    - "+.msftconnecttest.com"
+    - "+.msftncsi.com"
+    - "localhost.ptlogin2.qq.com"
+    - "localhost.sec.qq.com"
+    - "localhost.work.weixin.qq.com"
+  default-nameserver:
+    - "223.5.5.5"
+    - "119.29.29.29"
+  nameserver:
+    - "https://cloudflare-dns.com/dns-query"
+    - "https://dns.google/dns-query"
+    - "https://1.1.1.1/dns-query"
+    - "https://8.8.8.8/dns-query"
+  proxy-server-nameserver:
+    - "https://223.5.5.5/dns-query"
+    - "https://doh.pub/dns-query"
+  nameserver-policy:
+    'geosite:cn,private':
+      - "https://dns.alidns.com/dns-query"
+      - "https://doh.pub/dns-query"`
+
+                    const defaultRules = `rules:
+  - GEOIP,lan,DIRECT,no-resolve
+  - PROCESS-NAME,XTerminal.exe,DIRECT
+  - PROCESS-NAME,Thunder.exe,DIRECT
+  - PROCESS-NAME,DownloadSdkServer.exe,DIRECT
+  
+  # === 自定义直连  ===
+  - DOMAIN-SUFFIX,getgrass.io,DIRECT
+  - DOMAIN-SUFFIX,grass.io,DIRECT
+  - DOMAIN-SUFFIX,tianzecdn.com,DIRECT
+  - DOMAIN-SUFFIX,tianzebbs.com,DIRECT
+  - DOMAIN-KEYWORD,tianze,DIRECT
+  
+  # === GEOSITE 规则  ===
+  - GEOSITE,github,Proxy
+  - GEOSITE,twitter,Proxy
+  - GEOSITE,youtube,Proxy
+  - GEOSITE,google,Proxy
+  - GEOSITE,telegram,Proxy
+  - GEOSITE,netflix,Proxy
+  - GEOSITE,bilibili,DIRECT
+  - GEOSITE,bahamut,Proxy
+  - GEOSITE,spotify,Proxy
+  - GEOSITE,CN,DIRECT
+  - GEOSITE,geolocation-!cn,Proxy
+  
+  # === GEOIP 规则 ===
+  - GEOIP,google,Proxy
+  - GEOIP,netflix,Proxy
+  - GEOIP,telegram,Proxy
+  - GEOIP,twitter,Proxy
+  - GEOIP,CN,DIRECT
+  - MATCH,Proxy`
+
+                    // --- Methods ---
+                    const authFetch = async (url, opts = {}) => {
+                        opts.headers = { 'Authorization': localStorage.getItem('biaosub_token'), 'Content-Type': 'application/json', ...opts.headers }
+                        const res = await fetch(url, opts); if (res.status === 401) { isLoggedIn.value = false; return null; } return res
+                    }
+                    const showToast = (msg, type = 'success') => { toast.message = msg; toast.type = type; toast.show = true; setTimeout(() => toast.show = false, 3000) }
+                    const copyText = (txt) => navigator.clipboard.writeText(txt).then(() => showToast('已复制'))
+
+                    const handleLogin = async () => {
+                        loginLoading.value = true
+                        const res = await fetch(API + '/login', { method: 'POST', body: JSON.stringify({ password: loginPassword.value }) })
+                        if ((await res.json()).success) { localStorage.setItem('biaosub_token', loginPassword.value); isLoggedIn.value = true; loadData() }
+                        else showToast('密码错误', 'error')
+                        loginLoading.value = false
+                    }
+
+                    const loadData = async () => {
+                        const [rRes, gRes] = await Promise.all([authFetch(`${API}/subs`), authFetch(`${API}/groups`)])
+                        const rData = await rRes.json(); const gData = await gRes.json()
+                        resources.value = rData.data; groups.value = gData.data
+                    }
+                    const loadResources = async () => { const res = await authFetch(API + '/subs'); if (res) resources.value = (await res.json()).data }
+                    const loadGroups = async () => { const res = await authFetch(API + '/groups'); if (res) groups.value = (await res.json()).data }
+
+                    const getProgressClass = (p) => p > 90 ? 'progress-error' : (p > 75 ? 'progress-warning' : 'progress-primary')
+                    const isExpired = (ts) => ts ? Date.now() > ts * 1000 : false
+
+                    // 统一的资源切换逻辑
+                    const toggleResourceSelection = (resId, checked) => {
+                        if (checked) {
+                            const exists = groupForm.value.config.find(c => c.subId === resId)
+                            if (!exists) groupForm.value.config.push({ subId: resId, include: [] })
+                        } else {
+                            groupForm.value.config = groupForm.value.config.filter(c => c.subId !== resId)
+                        }
+                    }
+                    const isResourceSelected = (resId) => !!groupForm.value.config.find(c => c.subId === resId)
+
+                    const openResourceModal = () => { resourceForm.value = { name: '', url: '', type: 'group' }; resourceModal.isEdit = false; resourceModal.show = true }
+                    const editResource = (item) => { resourceForm.value = { ...item }; resourceModal.isEdit = true; resourceModal.show = true }
+                    const saveResource = async () => {
+                        if (resourceForm.value.type === 'group' && (!resourceForm.value.name || !resourceForm.value.name.trim())) {
+                            showToast('节点组必须填写名称', 'error'); return;
+                        }
+                        submitting.value = true
+                        const method = resourceModal.isEdit ? 'PUT' : 'POST'
+                        const url = resourceModal.isEdit ? `${API}/subs/${resourceForm.value.id}` : `${API}/subs`
+                        let info = null;
+                        if (resourceForm.value.url) {
+                            try {
+                                const checkRes = await authFetch(API + '/check', { method: 'POST', body: JSON.stringify({ url: resourceForm.value.url, type: resourceForm.value.type }) });
+                                const d = await checkRes.json();
+                                if (d.success) info = d.data;
+                            } catch (e) { }
+                        }
+                        const payload = { ...resourceForm.value, info };
+                        await authFetch(url, { method, body: JSON.stringify(payload) })
+                        resourceModal.show = false; submitting.value = false; loadResources()
+                    }
+                    const deleteResource = async (id) => { if (confirm('删除资源?')) { await authFetch(`${API}/subs/${id}`, { method: 'DELETE' }); loadResources() } }
+                    const refreshResource = async (item) => {
+                        item.refreshing = true;
+                        const res = await authFetch(API + '/check', { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type }) })
+                        const d = await res.json()
+                        if (d.success) {
+                            await authFetch(`${API}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({ info: d.data }) })
+                            showToast('刷新成功')
+                        } else { showToast('刷新失败', 'error') }
+                        item.refreshing = false; loadResources()
+                    }
+
+                    const selectAllResources = () => { selectedResources.value = resources.value.map(r => r.id) }
+                    const executeBatchDelete = async () => {
+                        if (!confirm(`确定删除选中的 ${selectedResources.value.length} 个资源吗?`)) return;
+                        await authFetch(API + '/subs/delete', { method: 'POST', body: JSON.stringify({ ids: selectedResources.value }) });
+                        selectedResources.value = []; batchMode.value = false; loadResources(); showToast('批量删除成功');
+                    }
+
+                    // --- Group & Template Logic ---
+                    const openGroupModal = () => { templateModal.show = true }
+                    const selectTemplate = (type) => {
+                        templateModal.show = false
+                        groupNameError.value = false; groupModal.isEdit = false; groupModal.tab = 'base'
+
+                        const base = {
+                            name: '',
+                            config: [],
+                            clash_config: { mode: 'generate', resources: [], header: '', groups: [], rules: '', raw_yaml: '' }
+                        }
+
+                        if (type === 'default') {
+                            base.clash_config.header = defaultHeader
+                            base.clash_config.rules = defaultRules
+                            base.clash_config.groups = [{ name: 'Proxy', type: 'select', proxies: [] }]
+                        } else if (type === 'raw') {
+                            base.clash_config.mode = 'raw'
+                            base.clash_config.groups = []
+                            groupModal.tab = 'raw'  // 直接跳转到托管配置 Tab
+                        } else {
+                            base.clash_config.groups = [{ name: 'Proxy', type: 'select', proxies: [] }]
+                        }
+
+                        groupForm.value = base
+                        groupModal.show = true
+                        templateModal.showMyTemplates = false
+                    }
+
+                    // 模板管理函数
+                    const loadTemplates = async () => {
+                        try {
+                            const res = await authFetch(API + '/templates')
+                            const d = await res.json()
+                            if (d.success) userTemplates.value = d.data || []
+                        } catch (e) { console.error('加载模板失败', e) }
+                    }
+
+                    const selectUserTemplate = (tpl) => {
+                        templateModal.show = false
+                        templateModal.showMyTemplates = false
+                        groupNameError.value = false; groupModal.isEdit = false; groupModal.tab = 'base'
+
+                        const base = {
+                            name: '',
+                            config: [],
+                            clash_config: {
+                                mode: 'generate',
+                                resources: [],
+                                header: tpl.header || '',
+                                groups: tpl.groups || [],
+                                rules: tpl.rules || '',
+                                raw_yaml: ''
+                            }
+                        }
+                        groupForm.value = base
+                        groupModal.show = true
+                        showToast(`已应用模板: ${tpl.name}`)
+                    }
+
+                    const deleteTemplate = async (id) => {
+                        if (!confirm('确定删除此模板?')) return
+                        await authFetch(API + '/templates/' + id, { method: 'DELETE' })
+                        loadTemplates()
+                        showToast('模板已删除')
+                    }
+
+                    const saveAsTemplate = async () => {
+                        const name = prompt('请输入模板名称:')
+                        if (!name) return
+                        await authFetch(API + '/templates', {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                name,
+                                header: groupForm.value.clash_config.header,
+                                groups: groupForm.value.clash_config.groups,
+                                rules: groupForm.value.clash_config.rules
+                            })
+                        })
+                        showToast(`模板 "${name}" 保存成功`)
+                    }
+
+                    const editGroup = (group) => {
+                        const g = JSON.parse(JSON.stringify(group))
+                        if (!g.clash_config) g.clash_config = { mode: 'generate', header: '', groups: [], rules: '', resources: [], raw_yaml: '' }
+                        if (!g.config) g.config = []
+                        groupForm.value = g
+                        groupNameError.value = false; groupModal.isEdit = true; groupModal.tab = 'base'; groupModal.show = true
+                    }
+
+                    const saveGroup = async () => {
+                        if (!groupForm.value.name) { groupNameError.value = true; return; }
+                        submitting.value = true
+                        if (groupForm.value.clash_config) groupForm.value.clash_config.resources = []
+
+                        const method = groupModal.isEdit ? 'PUT' : 'POST'
+                        const url = groupModal.isEdit ? `${API}/groups/${groupForm.value.id}` : `${API}/groups`
+                        await authFetch(url, { method, body: JSON.stringify(groupForm.value) })
+                        groupModal.show = false; loadGroups(); submitting.value = false
+                    }
+                    const deleteGroup = async (id) => { if (confirm('确定删除?')) { await authFetch(`${API}/groups/${id}`, { method: 'DELETE' }); loadGroups() } }
+                    const refreshToken = async (g) => { if (confirm('重置链接?')) { await authFetch(`${API}/groups/${g.id}`, { method: 'PUT', body: JSON.stringify({ refresh_token: true }) }); loadGroups() } }
+                    const copyGroupLink = (g, type) => {
+                        const host = window.location.origin
+                        const url = `${host}/api/g/${g.token}?format=${type}`
+                        navigator.clipboard.writeText(url).then(() => showToast('链接已复制', 'success'))
+                    }
+                    const getGroupResourceCount = (g) => { return (g.config ? g.config.length : 0); }
+                    const getResourceName = (id) => resources.value.find(r => r.id === id)?.name || '未知资源'
+
+                    // 全选/取消全选资源
+                    const selectAllGroupResources = () => {
+                        groupForm.value.config = resources.value.map(r => ({ subId: r.id, include: [], dialerProxy: { enabled: false, group: '' } }));
+                    }
+                    const deselectAllGroupResources = () => {
+                        groupForm.value.config = [];
+                    }
+
+                    // 链式代理配置
+                    const getDialerProxy = (resId) => {
+                        const conf = groupForm.value.config.find(c => c.subId === resId);
+                        return conf?.dialerProxy || { enabled: false, group: '' };
+                    }
+                    const setDialerProxy = (resId, enabled, group = '') => {
+                        const conf = groupForm.value.config.find(c => c.subId === resId);
+                        if (conf) {
+                            if (!conf.dialerProxy) conf.dialerProxy = {};
+                            conf.dialerProxy.enabled = enabled;
+                            conf.dialerProxy.group = group;
+                        }
+                    }
+
+                    const openNodeSelector = async (res) => {
+                        nodeSelector.resourceId = res.id; nodeSelector.resourceName = res.name;
+                        nodeSelector.show = true; nodeSelector.loading = true;
+                        // Find current selection in groupForm.config
+                        const currentConf = groupForm.value.config.find(c => c.subId === res.id)
+
+                        try {
+                            const checkRes = await authFetch(API + '/check', { method: 'POST', body: JSON.stringify({ url: res.url, type: res.type }) })
+                            const d = await checkRes.json()
+                            if (d.success && d.data.nodes) {
+                                nodeSelector.nodes = d.data.nodes
+                                if (currentConf && Array.isArray(currentConf.include) && currentConf.include.length > 0) {
+                                    nodeSelector.selected = 'select'
+                                    nodeSelector.tempSelected = [...currentConf.include]
+                                } else {
+                                    nodeSelector.selected = 'all'
+                                    nodeSelector.tempSelected = d.data.nodes.map(n => n.name)
+                                }
+                            } else { showToast('加载节点失败', 'error') }
+                        } catch (e) { showToast('加载节点失败', 'error') }
+                        nodeSelector.loading = false
+                    }
+                    const confirmNodeSelection = () => {
+                        const idx = groupForm.value.config.findIndex(x => x.subId === nodeSelector.resourceId)
+                        if (idx > -1) {
+                            if (nodeSelector.selected === 'all' || nodeSelector.tempSelected.length === nodeSelector.nodes.length) {
+                                groupForm.value.config[idx].include = []
+                            } else {
+                                groupForm.value.config[idx].include = nodeSelector.tempSelected
+                            }
+                        }
+                        nodeSelector.show = false
+                    }
+
+                    const addClashGroup = () => { groupForm.value.clash_config.groups.push({ name: 'NewGroup', type: 'select', proxies: [] }) }
+                    const openClashNodeSelector = async (group) => {
+                        clashNodeSelector.currentGroup = group; clashNodeSelector.show = true; clashNodeSelector.loading = true;
+                        // 只显示资源名称，不展开节点
+                        let allNames = []
+                        for (const conf of groupForm.value.config) {
+                            const res = resources.value.find(r => r.id === conf.subId)
+                            if (res) {
+                                allNames.push(res.name)
+                            }
+                        }
+                        clashNodeSelector.allNodeNames = allNames
+                        clashNodeSelector.tempSelected = [...(group.proxies || [])]
+                        clashNodeSelector.loading = false
+                    }
+                    const clashSelectAll = () => clashNodeSelector.tempSelected = [...clashNodeSelector.allNodeNames]
+                    const removeFromClashSelected = (name) => {
+                        clashNodeSelector.tempSelected = clashNodeSelector.tempSelected.filter(n => n !== name)
+                    }
+                    const confirmClashNodeSelection = () => {
+                        if (clashNodeSelector.currentGroup) clashNodeSelector.currentGroup.proxies = [...clashNodeSelector.tempSelected]
+                        clashNodeSelector.show = false
+                    }
+
+                    // 初始化拖动排序
+                    let clashSortable = null
+                    Vue.watch(() => clashNodeSelector.tempSelected.length, () => {
+                        Vue.nextTick(() => {
+                            if (clashSelectedList.value && clashNodeSelector.tempSelected.length > 0) {
+                                if (clashSortable) clashSortable.destroy()
+                                clashSortable = new Sortable(clashSelectedList.value, {
+                                    animation: 150,
+                                    ghostClass: 'sortable-ghost',
+                                    dragClass: 'sortable-drag',
+                                    onEnd: (evt) => {
+                                        const arr = [...clashNodeSelector.tempSelected]
+                                        const [moved] = arr.splice(evt.oldIndex, 1)
+                                        arr.splice(evt.newIndex, 0, moved)
+                                        clashNodeSelector.tempSelected = arr
+                                    }
+                                })
+                            }
+                        })
+                    })
+
+                    // 资源池拖动排序
+                    let resourceSortable = null
+                    Vue.onMounted(() => {
+                        Vue.nextTick(() => {
+                            if (resourceListEl.value) {
+                                resourceSortable = new Sortable(resourceListEl.value, {
+                                    animation: 150,
+                                    handle: '.drag-handle',
+                                    ghostClass: 'sortable-ghost',
+                                    dragClass: 'sortable-drag',
+                                    onEnd: (evt) => {
+                                        const arr = [...resources.value]
+                                        const [moved] = arr.splice(evt.oldIndex, 1)
+                                        arr.splice(evt.newIndex, 0, moved)
+                                        resources.value = arr
+                                        // 保存排序到后端
+                                        authFetch(API + '/subs/reorder', {
+                                            method: 'POST',
+                                            body: JSON.stringify({ order: arr.map(r => r.id) })
+                                        })
+                                    }
+                                })
+                            }
+                        })
+                    })
+
+                    // 节点预览拖动排序
+                    let previewSortable = null
+                    Vue.watch(() => previewModal.show, (show) => {
+                        if (show) {
+                            Vue.nextTick(() => {
+                                if (previewListEl.value) {
+                                    if (previewSortable) previewSortable.destroy()
+                                    previewSortable = new Sortable(previewListEl.value, {
+                                        animation: 150,
+                                        handle: '.drag-handle',
+                                        ghostClass: 'sortable-ghost',
+                                        dragClass: 'sortable-drag',
+                                        onEnd: (evt) => {
+                                            const arr = [...previewModal.nodes]
+                                            const [moved] = arr.splice(evt.oldIndex, 1)
+                                            arr.splice(evt.newIndex, 0, moved)
+                                            previewModal.nodes = arr
+                                        }
+                                    })
+                                }
+                            })
+                        }
+                    })
+
+                    // 聚合组资源选择拖动排序
+                    let groupResourceSortable = null
+                    Vue.watch(() => groupForm.value.config.length, () => {
+                        Vue.nextTick(() => {
+                            if (groupResourceListEl.value && groupForm.value.config.length > 0) {
+                                if (groupResourceSortable) groupResourceSortable.destroy()
+                                groupResourceSortable = new Sortable(groupResourceListEl.value, {
+                                    animation: 150,
+                                    ghostClass: 'sortable-ghost',
+                                    dragClass: 'sortable-drag',
+                                    onEnd: (evt) => {
+                                        const arr = [...groupForm.value.config]
+                                        const [moved] = arr.splice(evt.oldIndex, 1)
+                                        arr.splice(evt.newIndex, 0, moved)
+                                        groupForm.value.config = arr
+                                    }
+                                })
+                            }
+                        })
+                    })
+
+                    const handleYamlImport = (event) => {
+                        const file = event.target.files[0];
+                        if (!file) return;
+                        if (file.size > 2 * 1024 * 1024) { alert("文件过大"); return; }
+                        const reader = new FileReader();
+                        reader.onload = (e) => { groupForm.value.clash_config.raw_yaml = e.target.result; showToast("导入成功"); };
+                        reader.readAsText(file);
+                        event.target.value = '';
+                    }
+
+                    // 托管配置文件上传，自动读取文件名作为聚合组名称
+                    const handleRawYamlUpload = (event) => {
+                        const file = event.target.files[0];
+                        if (!file) return;
+                        if (file.size > 5 * 1024 * 1024) { showToast("文件过大，最大支持 5MB", "error"); return; }
+
+                        // 从文件名提取聚合组名称（去掉扩展名）
+                        const fileName = file.name.replace(/\.(yaml|yml|txt)$/i, '');
+                        groupForm.value.name = fileName;
+
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                            groupForm.value.clash_config.raw_yaml = e.target.result;
+                            showToast(`已导入: ${fileName}`);
+                        };
+                        reader.readAsText(file);
+                        event.target.value = '';
+                    }
+
+                    const previewNodes = async (item) => {
+                        const res = await authFetch(API + '/check', { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type }) })
+                        const d = await res.json()
+                        if (d.success && d.data.nodes) { previewModal.nodes = d.data.nodes; previewModal.show = true }
+                        else { showToast('预览失败', 'error') }
+                    }
+                    const copyAllPreviewNodes = () => { copyText(previewModal.nodes.map(n => n.link).join('\n')) }
+
+                    // 设置相关函数
+                    const openSettings = () => {
+                        settingsModal.newPassword = ''
+                        settingsModal.confirmPassword = ''
+                        settingsModal.show = true
+                    }
+
+                    const changePassword = () => {
+                        if (!settingsModal.newPassword) {
+                            showToast('请输入新密码', 'error')
+                            return
+                        }
+                        if (settingsModal.newPassword !== settingsModal.confirmPassword) {
+                            showToast('两次密码输入不一致', 'error')
+                            return
+                        }
+                        // 密码需要在 Cloudflare 环境变量中修改，这里只是提示
+                        const pwd = settingsModal.newPassword
+                        navigator.clipboard.writeText(pwd)
+                        showToast('新密码已复制，请在 Cloudflare 环境变量中更新 ADMIN_PASSWORD')
+                        settingsModal.newPassword = ''
+                        settingsModal.confirmPassword = ''
+                    }
+
+                    const exportBackup = async () => {
+                        try {
+                            const backup = {
+                                version: '1.0.0',
+                                exportTime: new Date().toISOString(),
+                                resources: resources.value,
+                                groups: groups.value,
+                                templates: userTemplates.value
+                            }
+                            const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' })
+                            const url = URL.createObjectURL(blob)
+                            const a = document.createElement('a')
+                            a.href = url
+                            a.download = `biaosub_backup_${new Date().toISOString().slice(0, 10)}.json`
+                            a.click()
+                            URL.revokeObjectURL(url)
+                            showToast('备份导出成功')
+                        } catch (e) { showToast('导出失败: ' + e.message, 'error') }
+                    }
+
+                    const importBackup = async (event) => {
+                        const file = event.target.files[0]
+                        if (!file) return
+                        try {
+                            const text = await file.text()
+                            const backup = JSON.parse(text)
+                            if (!backup.resources && !backup.groups) {
+                                showToast('无效的备份文件', 'error')
+                                return
+                            }
+                            if (!confirm(`确定导入备份吗？\n资源: ${backup.resources?.length || 0}\n聚合组: ${backup.groups?.length || 0}\n模板: ${backup.templates?.length || 0}`)) return
+
+                            // 调用导入 API
+                            const res = await authFetch(API + '/backup/import', {
+                                method: 'POST',
+                                body: JSON.stringify({
+                                    items: backup.resources,
+                                    groups: backup.groups
+                                })
+                            })
+                            const d = await res.json()
+                            if (d.success) {
+                                // 导入模板
+                                if (backup.templates) {
+                                    for (const tpl of backup.templates) {
+                                        await authFetch(API + '/templates', {
+                                            method: 'POST',
+                                            body: JSON.stringify(tpl)
+                                        })
+                                    }
+                                }
+                                loadData()
+                                loadTemplates()
+                                showToast('备份导入成功')
+                            } else {
+                                showToast('导入失败: ' + d.error, 'error')
+                            }
+                        } catch (e) { showToast('导入失败: ' + e.message, 'error') }
+                        event.target.value = ''
+                    }
+
+                    const logout = () => { localStorage.removeItem('biaosub_token'); isLoggedIn.value = false }
+
+                    if (localStorage.getItem('biaosub_token')) { isLoggedIn.value = true; loadData() }
+
+                    return {
+                        isLoggedIn, loginPassword, loginLoading, handleLogin, logout,
+                        currentTab, resources, groups, submitting, toast,
+                        batchMode, selectedResources, selectAllResources, executeBatchDelete,
+                        resourceModal, resourceForm, openResourceModal, editResource, saveResource, deleteResource, refreshResource,
+                        groupModal, groupForm, groupNameError, openGroupModal, editGroup, saveGroup, deleteGroup, refreshToken, copyGroupLink, getGroupResourceCount, getResourceName, handleYamlImport, handleRawYamlUpload,
+                        templateModal, selectTemplate, userTemplates, loadTemplates, selectUserTemplate, deleteTemplate, saveAsTemplate, toggleResourceSelection, isResourceSelected, selectAllGroupResources, deselectAllGroupResources, getDialerProxy, setDialerProxy, groupResourceListEl,
+                        nodeSelector, openNodeSelector, confirmNodeSelection,
+                        clashNodeSelector, clashSelectedList, addClashGroup, openClashNodeSelector, clashSelectAll, removeFromClashSelected, confirmClashNodeSelection,
+                        previewModal, previewListEl, previewNodes, copyText, copyAllPreviewNodes, resourceListEl,
+                        settingsModal, openSettings, changePassword, exportBackup, importBackup, getProgressClass, isExpired
+                    }
+                } catch (e) {
+                    alert("JS Error: " + e.message + "\n\n" + e.stack);
+                    console.error(e);
+                    return {};
+                }
+            }
+        }).mount('#app')
+    </script>
+</body>
+
+</html>
