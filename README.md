@@ -7,8 +7,8 @@
 
 ## ✨ 功能特性
 
-- 🔗 **多协议支持** - VMess、VLESS、Trojan、Shadowsocks、Hysteria2、TUIC 等
-- 📦 **资源池管理** - 统一管理订阅链接和自建节点
+- 🔗 **多协议支持** - VMess、VLESS、Trojan、Shadowsocks、Hysteria2、TUIC、AnyTLS
+- 📦 **资源池管理** - 统一管理的节点组和独立节点
 - 🔀 **聚合订阅** - 将多个资源组合成一个订阅链接
 - ⚙️ **Clash 配置生成** - 自动生成策略组和分流规则
 - 📝 **模板系统** - 保存和复用自定义配置模板
@@ -183,3 +183,4 @@ CREATE TABLE IF NOT EXISTS templates (
 感谢所有贡献者和用户的支持！
 
 如有问题或建议，欢迎提交 [Issue](https://github.com/0xdabiaoge/Biao-Sub/issues)。
+
