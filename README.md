@@ -39,10 +39,12 @@
 
 ### 第三步：初始化数据库表
 
-在 D1 数据库控制台中，进入 **控制台** 标签，复制粘贴执行以下 SQL 命令：
+在 D1 数据库控制台中，进入 **控制台** 标签，执行以下 SQL 命令：
+
+#### 方案 A：全新部署（首次安装）
+复制粘贴执行以下全部内容：
 
 ```sql
-
 CREATE TABLE IF NOT EXISTS subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -52,7 +54,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     params TEXT,
     status INTEGER DEFAULT 1,
     sort_order INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS groups (
@@ -60,9 +63,11 @@ CREATE TABLE IF NOT EXISTS groups (
     name TEXT NOT NULL,
     token TEXT UNIQUE NOT NULL,
     config TEXT,
+    clash_config TEXT,
     status INTEGER DEFAULT 1,
     sort_order INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS templates (
@@ -76,7 +81,19 @@ CREATE TABLE IF NOT EXISTS templates (
 );
 ```
 
-> ⚠️ **注意**：每条 SQL 命令需要单独执行，不要一次性粘贴全部。
+#### 方案 B：旧版本升级（保留数据）
+如果你是从旧版本升级，请依次执行以下迁移命令：
+
+```sql
+-- 为资源表添加更新时间列
+ALTER TABLE subscriptions ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;
+
+-- 为聚合组表添加 Clash 配置列和更新时间列
+ALTER TABLE groups ADD COLUMN clash_config TEXT;
+ALTER TABLE groups ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;
+```
+
+⚠️ **注意**：如果执行 `ALTER TABLE` 报错提示列已存在，可以忽略。执行完成后重新保存聚合组即可生效。
 
 ### 第四步：创建 Pages 项目
 
@@ -168,4 +185,5 @@ CREATE TABLE IF NOT EXISTS templates (
 ## 📝 更新日志
 
 ### 2026.02.04
+
 - **彻底重构**：原始版本存在诸多问题，且代码间互联性太强，修改一个极容易导致其他功能受到影响，故此彻底重构拆分。
