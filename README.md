@@ -85,15 +85,15 @@ CREATE TABLE IF NOT EXISTS templates (
 如果你是从旧版本升级，请依次执行以下迁移命令：
 
 ```sql
--- 为资源表添加更新时间列
+
 ALTER TABLE subscriptions ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;
 
--- 为聚合组表添加 Clash 配置列和更新时间列
 ALTER TABLE groups ADD COLUMN clash_config TEXT;
 ALTER TABLE groups ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;
+
 ```
 
-⚠️ **注意**：如果执行 `ALTER TABLE` 报错提示列已存在，可以忽略。执行完成后重新保存聚合组即可生效。
+> ⚠️ **注意**：如果执行 `ALTER TABLE` 报错提示列已存在，可以忽略。执行完成后重新保存聚合组即可生效。
 
 ### 第四步：创建 Pages 项目
 
@@ -185,5 +185,6 @@ ALTER TABLE groups ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;
 ## 📝 更新日志
 
 ### 2026.02.04
-
 - **彻底重构**：原始版本存在诸多问题，且代码间互联性太强，修改一个极容易导致其他功能受到影响，故此彻底重构拆分。
+- **优化节点协议解析**：大部分常用的节点协议及类型均以支持，除部分冷门节点类型尚未支持解析，基本日常使用都能够应付。
+- **拖拽排序再次优化**：目前拖拽排序功能基本完好，排序好的节点或者节点组，在yaml配置文件中也会跟随排序。

@@ -131,13 +131,15 @@ export const toClashProxy = (node) => {
     server: ${server}
     port: ${port}
     password: ${yamlStr(node.password)}
+    udp: true
     skip-cert-verify: ${skipCert}`;
             if (node.sni || node.servername) res += `\n    sni: ${node.sni || node.servername}`;
             if (node.network === 'ws') {
                 res += `\n    network: ws\n    ws-opts:\n      path: ${node['ws-opts']?.path || '/'}`;
                 if (node['ws-opts']?.headers?.Host) res += `\n      headers:\n        Host: ${node['ws-opts'].headers.Host}`;
+            } else if (node.network === 'grpc' && node['grpc-opts']) {
+                res += `\n    network: grpc\n    grpc-opts:\n      grpc-service-name: ${node['grpc-opts']['grpc-service-name'] || ''}`;
             }
-            if (node.udp) res += `\n    udp: true`;
             return res;
         }
 
@@ -158,6 +160,8 @@ export const toClashProxy = (node) => {
             if (node.network === 'ws') {
                 res += `\n    network: ws\n    ws-opts:\n      path: ${node['ws-opts']?.path || '/'}`;
                 res += `\n      headers:\n        Host: ${node['ws-opts']?.headers?.Host || ''}`;
+            } else if (node.network === 'grpc' && node['grpc-opts']) {
+                res += `\n    network: grpc\n    grpc-opts:\n      grpc-service-name: ${node['grpc-opts']['grpc-service-name'] || ''}`;
             }
             return res;
         }
@@ -170,8 +174,8 @@ export const toClashProxy = (node) => {
     server: ${server}
     port: ${port}
     uuid: ${node.uuid}
+    udp: true
     tls: ${node.tls === true}
-    network: ${node.network || 'tcp'}
     skip-cert-verify: ${skipCert}`;
             if (node.flow) res += `\n    flow: ${node.flow}`;
             if (node.sni || node.servername) res += `\n    servername: ${node.sni || node.servername}`;
@@ -181,10 +185,14 @@ export const toClashProxy = (node) => {
                 res += `\n    reality-opts:\n      public-key: ${node.reality.publicKey}`;
                 if (node.reality.shortId) res += `\n      short-id: ${node.reality.shortId}`;
             }
-            // WS
+            // Transport
             if (node.network === 'ws' && node['ws-opts']) {
-                res += `\n    ws-opts:\n      path: ${node['ws-opts']?.path || '/'}`;
+                res += `\n    network: ws\n    ws-opts:\n      path: ${node['ws-opts']?.path || '/'}`;
                 if (node['ws-opts']?.headers?.Host) res += `\n      headers:\n        Host: ${node['ws-opts'].headers.Host}`;
+            } else if (node.network === 'grpc' && node['grpc-opts']) {
+                res += `\n    network: grpc\n    grpc-opts:\n      grpc-service-name: ${node['grpc-opts']['grpc-service-name'] || ''}`;
+            } else {
+                res += `\n    network: ${node.network || 'tcp'}`;
             }
             return res;
         }

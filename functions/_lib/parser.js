@@ -97,12 +97,28 @@ export const parseNodesCommon = (text) => {
                 if (node.type === 'vless') {
                     node.uuid = url.username;
                     if (!node.network) node.network = 'tcp';
+                    // gRPC 支持
+                    if (node.network === 'grpc' || params.has('serviceName')) {
+                        node.network = 'grpc';
+                        node['grpc-opts'] = {
+                            'grpc-service-name': params.get('serviceName') || params.get('path') || '',
+                            'mode': params.get('mode') || 'gun'
+                        };
+                    }
                 }
 
                 // === Trojan ===
                 else if (node.type === 'trojan') {
                     node.password = decodeURIComponent(url.username);
                     if (!node.tls) node.tls = true; // Trojan 默认 TLS
+                    // gRPC 支持 (Trojan 也可以跑在 gRPC 上)
+                    if (node.network === 'grpc' || params.has('serviceName')) {
+                        node.network = 'grpc';
+                        node['grpc-opts'] = {
+                            'grpc-service-name': params.get('serviceName') || params.get('path') || '',
+                            'mode': params.get('mode') || 'gun'
+                        };
+                    }
                 }
 
                 // === Shadowsocks ===

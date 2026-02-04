@@ -67,6 +67,8 @@ export const clashNodeSelector = reactive({
     show: false,
     loading: false,
     currentGroup: null,
+    allResourceNames: [],
+    allGroupNames: [],
     allNodeNames: [],
     tempSelected: []
 })
