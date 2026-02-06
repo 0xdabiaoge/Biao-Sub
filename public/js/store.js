@@ -25,6 +25,7 @@ export const loginPassword = ref('')
 export const loginLoading = ref(false)
 
 // ============ UI 状态 ============
+export const theme = ref(localStorage.getItem('theme') || 'dark')
 export const currentTab = ref('resources')
 export const submitting = ref(false)
 export const toast = reactive({ show: false, message: '', type: 'success' })

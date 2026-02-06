@@ -257,3 +257,144 @@ export const toClashProxy = (node) => {
         return null;
     }
 }
+// --- 核心：组装完整订阅配置 ---
+export const assembleGroupConfig = async (db, token, parseNodesCommon) => {
+    const group = await db.prepare("SELECT * FROM groups WHERE token = ? AND status = 1").bind(token).first();
+    if (!group) return null;
+
+    const baseConfig = JSON.parse(group.config || '[]');
+    const clashConfig = group.clash_config ? JSON.parse(group.clash_config) : { mode: 'generate' };
+
+    // 1. Raw YAML Mode
+    if (clashConfig.mode === 'raw') {
+        return clashConfig.raw_yaml || "";
+    }
+
+    // 2. Generate Mode
+    let targetConfig = baseConfig;
+    // 如果指定了资源列表，则使用资源列表
+    if (clashConfig.resources && clashConfig.resources.length > 0) {
+        targetConfig = clashConfig.resources;
+    }
+
+    let allNodes = [];
+    const allNodeNamesSet = new Set();
+
+    // 预提取所有需要的订阅数据，减少数据库往返
+    const subIds = targetConfig.map(item => item.subId);
+    if (subIds.length === 0) return (clashConfig.header || "") + "\n\nproxies:\n\nproxy-groups:\n\n" + (clashConfig.rules || "");
+
+    const subsResults = await db.prepare(`SELECT * FROM subscriptions WHERE id IN (${subIds.map(() => '?').join(',')})`).bind(...subIds).all();
+    const subsMap = new Map(subsResults.results.map(s => [s.id, s]));
+
+    for (const item of targetConfig) {
+        const sub = subsMap.get(item.subId);
+        if (!sub || !sub.url) continue;
+
+        const nodes = parseNodesCommon(sub.url);
+        let allowed = 'all';
+        if (item.include && Array.isArray(item.include) && item.include.length > 0) allowed = new Set(item.include);
+
+        // 获取链式代理配置
+        const dialerProxyConfig = item.dialerProxy || { enabled: false, group: '' };
+
+        for (const node of nodes) {
+            if (allowed !== 'all' && !allowed.has(node.name)) continue;
+
+            // Deterministic Deduplication
+            let name = node.name.trim();
+            let i = 1;
+            let originalName = name;
+            while (allNodeNamesSet.has(name)) {
+                name = `${originalName} ${i++}`;
+            }
+            node.name = name;
+            allNodeNamesSet.add(name);
+
+            node.link = generateNodeLink(node);
+
+            // 标记链式代理信息
+            if (dialerProxyConfig.enabled && dialerProxyConfig.group) {
+                node._dialerProxy = dialerProxyConfig.group;
+            }
+
+            allNodes.push(node);
+        }
+    }
+
+    let yaml = (clashConfig.header || "") + "\n\nproxies:\n";
+    const generatedNodeNames = new Set();
+
+    // 分离普通节点和链式代理节点，链式代理节点排在末尾
+    const normalNodes = allNodes.filter(n => !n._dialerProxy);
+    const dialerNodes = allNodes.filter(n => n._dialerProxy);
+    const sortedNodes = [...normalNodes, ...dialerNodes];
+
+    // Generate Proxies
+    for (const node of sortedNodes) {
+        const proxyYaml = toClashProxy(node);
+        if (proxyYaml) {
+            if (node._dialerProxy) {
+                yaml += proxyYaml + `\n    dialer-proxy: ${node._dialerProxy}\n`;
+            } else {
+                yaml += proxyYaml + "\n";
+            }
+            generatedNodeNames.add(node.name);
+        }
+    }
+
+    // Generate Groups
+    yaml += "\nproxy-groups:\n";
+
+    // 建立资源名到节点名的映射
+    const resourceToNodes = {};
+    for (const [id, sub] of subsMap) {
+        if (sub.name) resourceToNodes[sub.name] = [];
+    }
+
+    // 填充映射
+    for (const item of targetConfig) {
+        const sub = subsMap.get(item.subId);
+        if (!sub) continue;
+        const resName = sub.name;
+        const nodes = parseNodesCommon(sub.url || "");
+        let allowed = 'all';
+        if (item.include && Array.isArray(item.include) && item.include.length > 0) allowed = new Set(item.include);
+        for (const node of nodes) {
+            if (allowed !== 'all' && !allowed.has(node.name)) continue;
+            if (generatedNodeNames.has(node.name) && resourceToNodes[resName]) {
+                resourceToNodes[resName].push(node.name);
+            } else {
+                for (const gName of generatedNodeNames) {
+                    if (gName === node.name || gName.startsWith(node.name + ' ')) {
+                        if (resourceToNodes[resName] && !resourceToNodes[resName].includes(gName)) {
+                            resourceToNodes[resName].push(gName);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (clashConfig.groups && Array.isArray(clashConfig.groups)) {
+        const groupNames = new Set(clashConfig.groups.map(g => g.name));
+        for (const g of clashConfig.groups) {
+            yaml += `  - name: ${yamlStr(g.name)}\n    type: ${g.type}\n    proxies:\n`;
+            if (g.proxies && Array.isArray(g.proxies)) {
+                g.proxies.forEach(p => {
+                    if (groupNames.has(p) && p !== g.name) {
+                        yaml += `      - ${yamlStr(p)}\n`;
+                    } else if (resourceToNodes[p] && resourceToNodes[p].length > 0) {
+                        resourceToNodes[p].forEach(nodeName => {
+                            yaml += `      - ${yamlStr(nodeName)}\n`;
+                        });
+                    } else if (generatedNodeNames.has(p) || ['DIRECT', 'REJECT', 'NO-RESOLVE'].includes(p)) {
+                        yaml += `      - ${yamlStr(p)}\n`;
+                    }
+                });
+            }
+        }
+    }
+    yaml += "\n" + (clashConfig.rules || "");
+    return yaml;
+};

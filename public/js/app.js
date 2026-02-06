@@ -1,23 +1,17 @@
 // BiaoSUB 应用入口
-// 导入状态
 import {
-    isLoggedIn, loginPassword, loginLoading,
-    currentTab, resources, groups, submitting, toast,
-    batchMode, selectedResources,
-    resourceModal, resourceForm,
-    groupModal, groupForm, groupNameError,
-    templateModal, userTemplates,
-    previewModal, settingsModal,
-    nodeSelector, clashNodeSelector,
-    clashSelectedList, resourceListEl, previewListEl, groupResourceListEl, groupListEl,
-    stats
+    resources, groups, isLoggedIn, loginPassword, loginLoading, currentTab, submitting,
+    toast, batchMode, selectedResources, resourceModal, groupModal, templateModal,
+    previewModal, settingsModal, resourceForm, groupForm, groupNameError, nodeSelector,
+    clashNodeSelector, clashSelectedList, resourceListEl, previewListEl,
+    groupResourceListEl, groupListEl, userTemplates, stats, theme
 } from './store.js'
 
 // 导入工具函数
 import { showToast, copyText, getProgressClass, isExpired } from './utils.js'
 
 // 导入API
-import { loadData, loadTemplates } from './api.js'
+import { loadResources, loadGroups, loadTemplates } from './api.js'
 
 // 导入功能模块
 import { handleLogin, logout, checkAuth } from './modules/auth.js'
@@ -47,21 +41,25 @@ import {
 import {
     openSettings, exportBackup, importBackup
 } from './modules/settings.js'
+import { initTheme, toggleTheme } from './modules/theme.js'
 
 // 创建 Vue 应用
 const { createApp, onMounted, nextTick } = Vue
 
-const app = createApp({
+createApp({
     setup() {
         // 初始化
         onMounted(() => {
+            initTheme() // 使用独立模块初始化主题
             checkAuth()
+            loadResources()
+            loadGroups()
+            loadTemplates()
             nextTick(() => {
                 initResourceSortable()
                 initGroupSortable()
             })
             setupSortableWatchers()
-            loadTemplates()
         })
 
         // 返回所有模板需要的变量和函数
@@ -74,11 +72,12 @@ const app = createApp({
             groupModal, groupForm, groupNameError,
             templateModal, userTemplates,
             previewModal, settingsModal,
-            nodeSelector, clashNodeSelector, stats,
+            nodeSelector, clashNodeSelector, stats, theme,
             clashSelectedList, resourceListEl, previewListEl, groupResourceListEl, groupListEl,
 
             // 工具函数
             showToast, copyText, getProgressClass, isExpired,
+            toggleTheme, // 使用独立模块的主题切换
 
             // 认证
             handleLogin, logout,

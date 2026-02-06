@@ -2,10 +2,22 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { handle } from 'hono/cloudflare-pages'
 import { generateToken, safeBase64Encode } from '../_lib/utils.js';
-import { generateNodeLink, toClashProxy } from '../_lib/generator.js';
+import { generateNodeLink, toClashProxy, assembleGroupConfig } from '../_lib/generator.js';
 import { parseNodesCommon } from '../_lib/parser.js';
 
 const app = new Hono().basePath('/api')
+
+// --- 表结构迁移优化 ---
+app.use('/*', async (c, next) => {
+    // 确保 groups 表有 cached_yaml 字段
+    try {
+        await c.env.DB.prepare(`ALTER TABLE groups ADD COLUMN cached_yaml TEXT`).run();
+    } catch (e) {
+        // 如果字段已存在，会报错，忽略即可
+    }
+    await next();
+})
+
 app.use('/*', cors())
 
 // --- 鉴权中间件 ---
@@ -24,161 +36,50 @@ app.get('/g/:token', async (c) => {
     const format = c.req.query('format') || 'base64';
 
     try {
-        const group = await c.env.DB.prepare("SELECT * FROM groups WHERE token = ? AND status = 1").bind(token).first();
+        // 1. 优先尝试从缓存读取
+        const group = await c.env.DB.prepare("SELECT name, cached_yaml, clash_config FROM groups WHERE token = ? AND status = 1").bind(token).first();
         if (!group) return c.text('Invalid Group Token', 404);
-
-        const baseConfig = JSON.parse(group.config || '[]');
-        const clashConfig = group.clash_config ? JSON.parse(group.clash_config) : { mode: 'generate' };
 
         // 设置文件名
         const filename = encodeURIComponent(group.name || 'GroupConfig');
         c.header('Content-Disposition', `attachment; filename*=UTF-8''${filename}.yaml; filename="${filename}.yaml"`);
         c.header('Subscription-Userinfo', 'upload=0; download=0; total=1073741824000000; expire=0');
 
-        // 1. Raw YAML Mode
-        if (format === 'clash' && clashConfig.mode === 'raw') {
-            return c.text(clashConfig.raw_yaml || "", 200, { 'Content-Type': 'text/yaml; charset=utf-8' });
+        let yamlContent = "";
+
+        // 如果是 Clash 请求且已有缓存，直接吐出 (极速)
+        if (format === 'clash' && group.cached_yaml) {
+            return c.text(group.cached_yaml, 200, { 'Content-Type': 'text/yaml; charset=utf-8' });
         }
 
-        // 2. Generate Mode
-        let targetConfig = baseConfig;
-        if (format === 'clash' && clashConfig.resources && clashConfig.resources.length > 0) {
-            targetConfig = clashConfig.resources;
-        }
+        // 2. 如果无缓存或非 Clash 格式，现场生成
+        yamlContent = await assembleGroupConfig(c.env.DB, token, parseNodesCommon);
+        if (yamlContent === null) return c.text('Generate Failed', 500);
 
-        let allNodes = [];
-        const allNodeNamesSet = new Set();
-
-        for (const item of targetConfig) {
-            const sub = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE id = ?").bind(item.subId).first();
-            if (!sub) continue;
-
-            let content = sub.url || "";
-            if (!content) continue;
-
-            const nodes = parseNodesCommon(content);
-            let allowed = 'all';
-            if (item.include && Array.isArray(item.include) && item.include.length > 0) allowed = new Set(item.include);
-
-            // 获取链式代理配置
-            const dialerProxyConfig = item.dialerProxy || { enabled: false, group: '' };
-
-            for (const node of nodes) {
-                if (allowed !== 'all' && !allowed.has(node.name)) continue;
-
-                // Deterministic Deduplication
-                let name = node.name.trim();
-                let i = 1;
-                let originalName = name;
-                while (allNodeNamesSet.has(name)) {
-                    name = `${originalName} ${i++}`;
-                }
-                node.name = name;
-                allNodeNamesSet.add(name);
-
-                node.link = generateNodeLink(node);
-
-                // 标记链式代理信息
-                if (dialerProxyConfig.enabled && dialerProxyConfig.group) {
-                    node._dialerProxy = dialerProxyConfig.group;
-                }
-
-                allNodes.push(node);
-            }
-        }
-
+        // 如果是 Clash 格式且刚才生成了，存入缓存备用
         if (format === 'clash') {
-            if (!clashConfig) return c.text("Clash config not found.", 404);
-
-            let yaml = (clashConfig.header || "") + "\n\nproxies:\n";
-            const generatedNodeNames = new Set();
-
-            // 分离普通节点和链式代理节点，链式代理节点排在末尾
-            const normalNodes = allNodes.filter(n => !n._dialerProxy);
-            const dialerNodes = allNodes.filter(n => n._dialerProxy);
-            const sortedNodes = [...normalNodes, ...dialerNodes];
-
-            // Generate Proxies
-            for (const node of sortedNodes) {
-                const proxyYaml = toClashProxy(node);
-                if (proxyYaml) {
-                    // 添加 dialer-proxy 字段
-                    if (node._dialerProxy) {
-                        yaml += proxyYaml + `\n    dialer-proxy: ${node._dialerProxy}\n`;
-                    } else {
-                        yaml += proxyYaml + "\n";
-                    }
-                    generatedNodeNames.add(node.name);
-                }
-            }
-
-            // Generate Groups (支持资源名称展开为节点名)
-            yaml += "\nproxy-groups:\n";
-
-            // 建立资源名到节点名的映射
-            const resourceToNodes = {};
-            for (const item of targetConfig) {
-                const sub = await c.env.DB.prepare("SELECT name FROM subscriptions WHERE id = ?").bind(item.subId).first();
-                if (sub && sub.name) {
-                    resourceToNodes[sub.name] = [];
-                }
-            }
-            // 填充映射（使用已生成的节点名）
-            for (const item of targetConfig) {
-                const sub = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE id = ?").bind(item.subId).first();
-                if (!sub) continue;
-                const resName = sub.name;
-                const nodes = parseNodesCommon(sub.url || "");
-                let allowed = 'all';
-                if (item.include && Array.isArray(item.include) && item.include.length > 0) allowed = new Set(item.include);
-                for (const node of nodes) {
-                    if (allowed !== 'all' && !allowed.has(node.name)) continue;
-                    // 使用去重后的节点名
-                    if (generatedNodeNames.has(node.name) && resourceToNodes[resName]) {
-                        resourceToNodes[resName].push(node.name);
-                    } else {
-                        // 查找可能重名的节点
-                        for (const gName of generatedNodeNames) {
-                            if (gName === node.name || gName.startsWith(node.name + ' ')) {
-                                if (resourceToNodes[resName] && !resourceToNodes[resName].includes(gName)) {
-                                    resourceToNodes[resName].push(gName);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (clashConfig.groups && Array.isArray(clashConfig.groups)) {
-                const groupNames = new Set(clashConfig.groups.map(g => g.name));
-                for (const g of clashConfig.groups) {
-                    yaml += `  - name: ${g.name}\n    type: ${g.type}\n    proxies:\n`;
-                    if (g.proxies && Array.isArray(g.proxies)) {
-                        g.proxies.forEach(p => {
-                            // 1. 检查是否是其他策略组名称（嵌套引用）- 优先级高于资源组，但需排除当前组名以支持同名资源组展开
-                            if (groupNames.has(p) && p !== g.name) {
-                                yaml += `      - ${p}\n`;
-                            }
-                            // 2. 检查是否是资源名称，如果是则展开
-                            else if (resourceToNodes[p] && resourceToNodes[p].length > 0) {
-                                resourceToNodes[p].forEach(nodeName => {
-                                    yaml += `      - ${nodeName}\n`;
-                                });
-                            }
-                            // 3. 检查是否是节点名称或标准策略
-                            else if (generatedNodeNames.has(p) || ['DIRECT', 'REJECT', 'NO-RESOLVE'].includes(p)) {
-                                yaml += `      - ${p}\n`;
-                            }
-                        });
-                    }
-                }
-            }
-            yaml += "\n" + (clashConfig.rules || "");
-            return c.text(yaml, 200, { 'Content-Type': 'text/yaml; charset=utf-8' });
+            await c.env.DB.prepare("UPDATE groups SET cached_yaml = ? WHERE token = ?").bind(yamlContent, token).run();
+            return c.text(yamlContent, 200, { 'Content-Type': 'text/yaml; charset=utf-8' });
         }
 
-        const links = allNodes.map(n => n.link).join('\n');
-        return c.text(safeBase64Encode(links), 200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        // Base64 逻辑（通用订阅格式）
+        // 从 YAML 中提取 proxies 部分转为 base64 链接列表比较复杂，
+        // 我们依然采用轻量级的动态提取方式处理 base64 订阅
+        // (由于主要是自建节点，这一步压力不大)
+        const clashConfig = group.clash_config ? JSON.parse(group.clash_config) : { mode: 'generate' };
+        let targetConfig = JSON.parse(group.config || '[]');
+        if (clashConfig.resources && clashConfig.resources.length > 0) targetConfig = clashConfig.resources;
+
+        let allLinks = [];
+        for (const item of targetConfig) {
+            const sub = await c.env.DB.prepare("SELECT url FROM subscriptions WHERE id = ?").bind(item.subId).first();
+            if (sub && sub.url) {
+                const nodes = parseNodesCommon(sub.url);
+                nodes.forEach(n => allLinks.push(generateNodeLink(n)));
+            }
+        }
+        return c.text(safeBase64Encode(allLinks.join('\n')), 200, { 'Content-Type': 'text/plain; charset=utf-8' });
+
     } catch (e) { return c.text(e.message, 500); }
 })
 
@@ -233,7 +134,31 @@ app.put('/subs/:id', async (c) => {
     if (b.type !== undefined) { parts.push("type=?"); args.push(b.type) } if (b.status !== undefined) { parts.push("status=?"); args.push(parseInt(b.status)) }
     if (b.info) { parts.push("info=?"); args.push(JSON.stringify(b.info)) }
     const query = `UPDATE subscriptions SET ${parts.join(', ')} WHERE id=?`; args.push(id);
-    await c.env.DB.prepare(query).bind(...args).run(); return c.json({ success: true })
+    await c.env.DB.prepare(query).bind(...args).run();
+
+    // 自建节点场景优化：如果修改了单节点资源，自动刷新所有包含该资源的聚合组缓存
+    try {
+        const affectedGroups = await c.env.DB.prepare("SELECT id, token FROM groups").all();
+        const batchUpdates = [];
+        for (const g of affectedGroups.results) {
+            // 这里简单检查，因为 config 是 JSON 字符串
+            const fullGroup = await c.env.DB.prepare("SELECT config, clash_config FROM groups WHERE id = ?").bind(g.id).first();
+            const config = JSON.parse(fullGroup.config || '[]');
+            const clashConfig = fullGroup.clash_config ? JSON.parse(fullGroup.clash_config) : {};
+            const resources = clashConfig.resources || [];
+
+            const isUsed = config.some(c => c.subId == id) || resources.some(r => r.subId == id);
+            if (isUsed) {
+                const newYaml = await assembleGroupConfig(c.env.DB, g.token, parseNodesCommon);
+                if (newYaml) {
+                    batchUpdates.push(c.env.DB.prepare("UPDATE groups SET cached_yaml = ? WHERE id = ?").bind(newYaml, g.id));
+                }
+            }
+        }
+        if (batchUpdates.length > 0) await c.env.DB.batch(batchUpdates);
+    } catch (e) { console.error('Refresh related groups failed:', e.message); }
+
+    return c.json({ success: true })
 })
 app.delete('/subs/:id', async (c) => { await c.env.DB.prepare("DELETE FROM subscriptions WHERE id=?").bind(c.req.param('id')).run(); return c.json({ success: true }) })
 app.post('/subs/delete', async (c) => {
@@ -262,20 +187,52 @@ app.post('/groups', async (c) => {
     const b = await c.req.json();
     const token = generateToken();
     const clashConfig = b.clash_config || { mode: 'generate', header: "", groups: [], rules: "", resources: [], raw_yaml: "" };
+
+    // 1. 先插入基础数据
     await c.env.DB.prepare("INSERT INTO groups (name, token, config, clash_config, status, sort_order) VALUES (?, ?, ?, ?, 1, 0)")
         .bind(b.name, token, JSON.stringify(b.config || []), JSON.stringify(clashConfig)).run();
+
+    // 2. 立即生成一次静态缓存并更新
+    const yaml = await assembleGroupConfig(c.env.DB, token, parseNodesCommon);
+    if (yaml) {
+        await c.env.DB.prepare("UPDATE groups SET cached_yaml = ? WHERE token = ?").bind(yaml, token).run();
+    }
+
     return c.json({ success: true })
 })
 app.put('/groups/:id', async (c) => {
     const b = await c.req.json(); const id = c.req.param('id');
     let parts = ["updated_at=CURRENT_TIMESTAMP"]; let args = [];
+
     if (b.name !== undefined) { parts.push("name=?"); args.push(b.name) }
     if (b.config !== undefined) { parts.push("config=?"); args.push(JSON.stringify(b.config)) }
     if (b.clash_config !== undefined) { parts.push("clash_config=?"); args.push(JSON.stringify(b.clash_config)) }
     if (b.status !== undefined) { parts.push("status=?"); args.push(parseInt(b.status)) }
-    if (b.refresh_token) { parts.push("token=?"); args.push(generateToken()) }
+
+    let newToken = null;
+    if (b.refresh_token) {
+        newToken = generateToken();
+        parts.push("token=?"); args.push(newToken);
+    }
+
+    // 如果修改了配置，标记需要重新生成缓存
+    const shouldRefreshCache = b.config !== undefined || b.clash_config !== undefined || b.refresh_token;
+
     const query = `UPDATE groups SET ${parts.join(', ')} WHERE id=?`; args.push(id);
-    await c.env.DB.prepare(query).bind(...args).run(); return c.json({ success: true })
+    await c.env.DB.prepare(query).bind(...args).run();
+
+    // 如果需要刷新缓存
+    if (shouldRefreshCache) {
+        const group = await c.env.DB.prepare("SELECT token FROM groups WHERE id = ?").bind(id).first();
+        if (group) {
+            const yaml = await assembleGroupConfig(c.env.DB, group.token, parseNodesCommon);
+            if (yaml) {
+                await c.env.DB.prepare("UPDATE groups SET cached_yaml = ? WHERE id = ?").bind(yaml, id).run();
+            }
+        }
+    }
+
+    return c.json({ success: true })
 })
 app.delete('/groups/:id', async (c) => { await c.env.DB.prepare("DELETE FROM groups WHERE id=?").bind(c.req.param('id')).run(); return c.json({ success: true }) })
 app.post('/groups/reorder', async (c) => {

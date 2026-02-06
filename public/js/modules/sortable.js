@@ -128,11 +128,17 @@ export const initGroupResourceSortable = () => {
     })
 }
 
-// Clash 节点排序初始化 - 增强数据与 DOM 同步
-export const initClashSortable = () => {
-    // 确保 DOM 元素存在
+// Clash 节点排序初始化 - 增强版 (Vue Compatible)
+export const initClashSortable = (retryCount = 0) => {
     const el = clashSelectedList.value
-    if (!el) return
+
+    // 如果元素还没准备好，进行重试（最多 10 次）
+    if (!el) {
+        if (retryCount < 10) {
+            setTimeout(() => initClashSortable(retryCount + 1), 100)
+        }
+        return
+    }
 
     if (clashSortable) {
         clashSortable.destroy()
@@ -153,11 +159,12 @@ export const initClashSortable = () => {
             // 1. 获取最新快照
             const snapshot = clashSortable._snapshot || [...clashNodeSelector.tempSelected]
 
-            // 2. 取消 Sortable 的 DOM 变动（关键：让 Vue 重新按照数据渲染 DOM）
+            // 2. 核心修复：手动将 DOM 移回原位，彻底交给 Vue 接管
             const parent = evt.from
             const itemEl = evt.item
             const children = Array.from(parent.children)
-            // 将拖动的元素移回原位
+
+            itemEl.remove()
             if (evt.oldIndex < children.length) {
                 parent.insertBefore(itemEl, parent.children[evt.oldIndex])
             } else {
@@ -169,10 +176,8 @@ export const initClashSortable = () => {
             const [moved] = arr.splice(evt.oldIndex, 1)
             arr.splice(evt.newIndex, 0, moved)
 
-            // 触发 Vue 更新
+            // 触发更新
             clashNodeSelector.tempSelected = arr
-
-            // 4. 更新快照以备下次拖拽
             clashSortable._snapshot = [...arr]
         }
     })
@@ -205,17 +210,22 @@ export const setupSortableWatchers = () => {
         Vue.nextTick(initGroupResourceSortable)
     })
 
-    // Clash 节点选择器：同时监听“显示状态”和“已选数量”
-    // 因为已选列表有 v-if，数量从 0 变 1 时 DOM 才会出现
-    Vue.watch(
-        [() => clashNodeSelector.show, () => clashNodeSelector.tempSelected.length],
-        ([show, len]) => {
-            if (show && len > 0) {
-                Vue.nextTick(() => setTimeout(initClashSortable, 200))
-            } else if (!show && clashSortable) {
-                clashSortable.destroy()
-                clashSortable = null
-            }
+    // Clash 节点选择器：增强型监听
+    // 强制依赖 show 状态的变化来初始化
+    Vue.watch(() => clashNodeSelector.show, (show) => {
+        if (show) {
+            // 给模态框动画和 DOM 渲染留出时间
+            setTimeout(() => initClashSortable(), 300)
+        } else if (clashSortable) {
+            clashSortable.destroy()
+            clashSortable = null
         }
-    )
+    })
+
+    // 如果 len 发生变化（比如全选、清空），也要尝试重新初始化以防 DOM 重构
+    Vue.watch(() => clashNodeSelector.tempSelected.length, (newLen) => {
+        if (clashNodeSelector.show && newLen > 0) {
+            setTimeout(() => initClashSortable(), 300)
+        }
+    })
 }
