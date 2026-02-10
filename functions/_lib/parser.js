@@ -17,14 +17,26 @@ export const parseNodesCommon = (text) => {
     if (!decoded || decoded.length < 5 || /[\x00-\x08]/.test(decoded)) decoded = text;
 
     // 1. 处理以换行分隔的 URI Scheme (支持 hy2/hy 短协议名)
-    // 先按行分割，每行单独匹配协议前缀，避免节点名含空格被截断
-    const protocolPrefix = /^(vmess|vless|ss|trojan|hysteria2|hysteria|hy2|hy|tuic|anytls):\/\/.+/i;
-    const lines = decoded.split(/[\r\n]+/);
+    // 混合方案：按行分割后，检测每行是否含多个协议链接
+    //   - 含多个协议头 → 用正则逐个提取（确保拆分）
+    //   - 仅含单个 → 保留整行（保留节点名中的空格）
+    const protocolRe = /(vmess|vless|ss|trojan|hysteria2|hysteria|hy2|hy|tuic|anytls):\/\//gi;
+    const linkExtract = /(vmess|vless|ss|trojan|hysteria2|hysteria|hy2|hy|tuic|anytls):\/\/[^\s\n"']+/gi;
+    const rawLines = decoded.split(/[\r\n]+/);
     const matches = [];
-    for (const line of lines) {
+    for (const line of rawLines) {
         const trimmed = line.trim();
-        if (protocolPrefix.test(trimmed)) {
+        if (!trimmed) continue;
+        // 计算当前行包含多少个协议头
+        const hits = trimmed.match(protocolRe);
+        if (!hits) continue;
+        if (hits.length === 1) {
+            // 仅一个链接，保留整行（节点名可能含空格）
             matches.push(trimmed);
+        } else {
+            // 多个链接在同一行，用正则逐个提取
+            const extracted = trimmed.match(linkExtract);
+            if (extracted) matches.push(...extracted);
         }
     }
     if (matches) {
